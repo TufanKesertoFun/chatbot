@@ -45,7 +45,7 @@ export class OvoWidgetClient {
 
   async startSession({ visitorName, preferredLang, locale, userProfile, user }) {
     const normalizedProfile = normalizeUserProfile(userProfile || user);
-    const response = await this.apiClient.post('/widget/session', {
+    const response = await this.apiClient.post('/api/widget/session', {
       visitorName,
       preferredLang,
       userProfile: normalizedProfile,

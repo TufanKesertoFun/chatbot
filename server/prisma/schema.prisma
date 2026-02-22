@@ -1,0 +1,363 @@
+// server/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- ENUMLAR ---
+enum ConversationStatus {
+  WAITING // Agent bekleniyor
+  ASSIGNED // Agent üzerinde
+  RESOLVED // Çözüldü/Kapandı
+}
+
+enum ParticipantType {
+  VISITOR
+  AGENT
+  SYSTEM // Sistem mesajları için
+  BOT // LLM Bot için
+}
+
+enum UserRole {
+  SUPER_ADMIN // Tüm ayarları görür
+  AGENT // Sadece sohbetleri yönetir
+}
+
+enum LLMProvider {
+  GEMINI
+  OPENAI
+}
+
+enum PriorityLevel {
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  CONTACTED
+  WON
+  LOST
+}
+
+enum LeadSource {
+  WIDGET
+  SDK_API
+  MANUAL
+}
+
+enum LeadActivityType {
+  PROFILE_CAPTURED
+  PROFILE_UPDATED
+  STATUS_UPDATED
+  NOTE_ADDED
+}
+
+enum HandoffReason {
+  NO_DATA
+  EXPLICIT_HUMAN_REQUEST
+  POLICY_BLOCK
+  NEGATIVE_SENTIMENT
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  SUPPORTED
+  UNSUPPORTED
+}
+
+// --- AUTH & CONFIG ---
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  password_hash String
+  full_name     String?
+  role          UserRole @default(AGENT)
+  // YENİ: Agent'ın bildiği dil (Varsayılan Türkçe)
+  agent_lang    String   @default("tr") @db.VarChar(5)
+  created_at    DateTime @default(now()) @db.Timestamptz
+
+  assignments     Assignment[]
+  Conversation    Conversation[]
+  AuditLog        AuditLog[]
+  lead_activities LeadActivity[]
+
+  @@map("users")
+}
+
+model LLMConfig {
+  id                       String      @id @default(uuid())
+  provider                 LLMProvider @default(GEMINI)
+  api_key                  String // Şifreli saklamak gerekir ama MVP'de düz tutalım
+  model_name               String // örn: "gemini-pro" veya "gpt-4"
+  temperature              Float       @default(0.7)
+  min_similarity_threshold Float       @default(0.1)
+  top_k                    Int         @default(3)
+
+  // Guardrail Ayarları
+  use_guardrails              Boolean @default(false) // "Cevabı denetleme" modu
+  system_prompt               String? @db.Text // Botun ana karakteri
+  enable_intent_classifier    Boolean @default(true)
+  intent_confidence_threshold Float   @default(0.65)
+  enable_future_state_machine Boolean @default(false)
+
+  is_active  Boolean  @default(false)
+  updated_at DateTime @updatedAt
+
+  @@map("llm_configs")
+}
+
+// --- RAG (KNOWLEDGE BASE) ---
+
+model KnowledgeBase {
+  id           String   @id @default(uuid())
+  title        String
+  content      String   @db.Text // Orijinal metin (Text Editor'den gelen)
+  is_published Boolean  @default(true)
+  created_at   DateTime @default(now()) @db.Timestamptz
+
+  chunks KnowledgeChunk[]
+
+  @@map("knowledge_bases")
+}
+
+model KnowledgeChunk {
+  id      String @id @default(uuid())
+  kb_id   String
+  content String @db.Text // Bölünmüş parça
+
+  // PostgreSQL pgvector alanı. 
+  // Gemini embedding boyutu = 768
+  // OpenAI text-embedding-3-small = 1536
+  // MVP'de Gemini odaklı olduğumuz için 768 sabitliyoruz.
+  embedding Unsupported("vector(768)")?
+
+  knowledge_base KnowledgeBase @relation(fields: [kb_id], references: [id], onDelete: Cascade)
+
+  @@map("knowledge_chunks")
+}
+
+// --- CHAT CORE ---
+
+model Conversation {
+  id                   String             @id @default(uuid())
+  status               ConversationStatus @default(WAITING)
+  visitor_lang         String?            @db.VarChar(10)
+  visitor_external_id  String?            @db.VarChar(128)
+  visitor_email        String?            @db.VarChar(320)
+  visitor_full_name    String?            @db.VarChar(150)
+  visitor_phone        String?            @db.VarChar(64)
+  lead_status          LeadStatus         @default(NEW)
+  lead_source          LeadSource         @default(WIDGET)
+  lead_last_contact_at DateTime?          @db.Timestamptz
+
+  // YENİ: Agent devralınca bu False olacak ve Bot susacak.
+  bot_enabled Boolean @default(true)
+
+  // ... (Diğer alanlar aynı) ...
+  tags              String[]
+  summary           String?       @db.Text
+  satisfaction      Int?
+  priority          PriorityLevel @default(NORMAL)
+  assigned_agent_id String?
+  assigned_at       DateTime?
+  resolved_at       DateTime?
+  created_at        DateTime      @default(now()) @db.Timestamptz
+  updated_at        DateTime      @updatedAt @db.Timestamptz
+  last_message_at   DateTime      @default(now()) @db.Timestamptz
+
+  participants    Participant[]
+  messages        Message[]
+  assignment      Assignment?
+  assigned_agent  User?                @relation(fields: [assigned_agent_id], references: [id])
+  metrics         ConversationMetrics?
+  lead_activities LeadActivity[]
+
+  @@index([last_message_at(sort: Desc)])
+  @@index([assigned_agent_id])
+  @@index([lead_status, created_at(sort: Desc)])
+  @@index([visitor_email])
+  @@index([visitor_external_id])
+  @@index([lead_last_contact_at(sort: Desc)])
+}
+
+model LeadActivity {
+  id              String           @id @default(uuid())
+  conversation_id String
+  actor_user_id   String?
+  type            LeadActivityType
+  payload         Json?
+  created_at      DateTime         @default(now()) @db.Timestamptz
+
+  conversation Conversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  actor_user   User?        @relation(fields: [actor_user_id], references: [id], onDelete: SetNull)
+
+  @@index([conversation_id, created_at(sort: Desc)])
+  @@index([actor_user_id, created_at(sort: Desc)])
+  @@map("lead_activities")
+}
+
+model ConversationMetrics {
+  id                      String         @id @default(uuid())
+  conversation_id         String         @unique
+  created_at              DateTime       @default(now()) @db.Timestamptz
+  first_response_at       DateTime?
+  first_bot_response_at   DateTime?
+  first_agent_response_at DateTime?
+  resolved_at             DateTime?
+  handoff_reason          HandoffReason?
+  csat_score              Int?
+
+  conversation Conversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@index([created_at])
+  @@map("conversation_metrics")
+}
+
+model Participant {
+  id              String          @id @default(uuid())
+  conversation_id String
+  type            ParticipantType
+  display_name    String?
+  created_at      DateTime        @default(now()) @db.Timestamptz
+
+  conversation Conversation @relation(fields: [conversation_id], references: [id])
+  messages     Message[]
+  assignment   Assignment[] // Agent ise buraya bağlanır
+
+  @@map("participants")
+}
+
+model Assignment {
+  id              String   @id @default(uuid())
+  conversation_id String   @unique
+  // Artık Users tablosundaki gerçek bir kullanıcıya (Agent) bağlanıyor
+  user_id         String
+  assigned_at     DateTime @default(now()) @db.Timestamptz
+
+  conversation Conversation @relation(fields: [conversation_id], references: [id])
+  agent_user   User         @relation(fields: [user_id], references: [id])
+
+  // Geriye dönük uyumluluk için Participant tablosuyla ilişkiyi opsiyonel tutuyoruz
+  // veya logic içinde halledeceğiz.
+  participant    Participant? @relation(fields: [participant_id], references: [id])
+  participant_id String?
+
+  @@index([user_id])
+  @@map("assignments")
+}
+
+model Message {
+  id                    String          @id @default(uuid())
+  conversation_id       String
+  sender_participant_id String
+  sender_type           ParticipantType
+
+  source_lang String @db.VarChar(10)
+  target_lang String @db.VarChar(10)
+
+  text_original   String  @db.Text
+  text_translated String? @db.Text
+  text_masked     String? @db.Text
+
+  // RAG Kaynakça
+  citations           Json? // Hangi KB parçalarından alıntı yapıldı?
+  verification_status VerificationStatus @default(UNVERIFIED)
+
+  // YENİ: 1 = Like, -1 = Dislike, null = Nötr
+  feedback Int?
+
+  translation_provider String?  @default("google")
+  created_at           DateTime @default(now()) @db.Timestamptz
+
+  conversation    Conversation      @relation(fields: [conversation_id], references: [id])
+  sender          Participant       @relation(fields: [sender_participant_id], references: [id])
+  TrainingExample TrainingExample[]
+
+  @@index([conversation_id, created_at])
+  @@map("messages")
+}
+
+model TrainingExample {
+  id                    String   @id @default(uuid())
+  message_id            String?
+  conversation_id       String?
+  question              String   @db.Text
+  question_masked       String?  @db.Text
+  bot_answer            String   @db.Text
+  bot_answer_masked     String?  @db.Text
+  correct_answer        String?  @db.Text
+  correct_answer_masked String?  @db.Text
+  feedback_score        Int?
+  created_at            DateTime @default(now()) @db.Timestamptz
+
+  message Message? @relation(fields: [message_id], references: [id])
+
+  @@index([created_at])
+  @@map("training_examples")
+}
+
+model EvalQuestion {
+  id              String   @id @default(uuid())
+  question        String   @db.Text
+  expected_answer String   @db.Text
+  is_active       Boolean  @default(true)
+  created_at      DateTime @default(now()) @db.Timestamptz
+
+  results EvalResult[]
+
+  @@index([created_at])
+  @@map("eval_questions")
+}
+
+model EvalRun {
+  id         String   @id @default(uuid())
+  created_at DateTime @default(now()) @db.Timestamptz
+  total      Int
+  coverage   Float
+  accuracy   Float
+
+  results EvalResult[]
+
+  @@index([created_at])
+  @@map("eval_runs")
+}
+
+model EvalResult {
+  id               String   @id @default(uuid())
+  run_id           String
+  eval_question_id String
+  answer_text      String?  @db.Text
+  found            Boolean  @default(false)
+  is_correct       Boolean  @default(false)
+  created_at       DateTime @default(now()) @db.Timestamptz
+
+  run           EvalRun      @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  eval_question EvalQuestion @relation(fields: [eval_question_id], references: [id], onDelete: Cascade)
+
+  @@index([created_at])
+  @@map("eval_results")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  user_id     String?
+  action      String
+  target_type String?
+  target_id   String?
+  metadata    Json?
+  created_at  DateTime @default(now()) @db.Timestamptz
+
+  user User? @relation(fields: [user_id], references: [id])
+
+  @@index([user_id, created_at])
+  @@map("audit_logs")
+}

@@ -509,15 +509,24 @@ async function processVisitorMessage({ conversationId, text, participantId, io, 
     return { handledByBot: true, botMessage: botPayload };
   }
 
-  await switchToHandoff({
+  const noDataFallbackByLang = (langCode) => {
+    const safe = String(langCode || 'en').toLowerCase();
+    if (safe.startsWith('tr')) {
+      return 'Bu konuda yeterli bilgi bulamadim. Isterseniz soruyu daha detayli yazin veya sizi temsilciye baglayabilirim.';
+    }
+    return 'I could not find enough information for that yet. You can ask with more detail, or I can connect you to a human agent.';
+  };
+
+  const fallbackPayload = await emitBotMessage({
     io,
     conversation,
     conversationId,
-    detectedLang,
-    reason: 'NO_DATA',
-    emitNotice: true,
+    targetLang: detectedLang || 'en',
+    answer: noDataFallbackByLang(detectedLang || 'en'),
+    citations: [],
+    verificationStatus: 'UNVERIFIED',
   });
-  return { handledByBot: false, handoffReason: 'NO_DATA' };
+  return { handledByBot: true, botMessage: fallbackPayload, noData: true };
 }
 
 module.exports = {

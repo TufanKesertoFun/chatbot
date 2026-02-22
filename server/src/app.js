@@ -27,7 +27,8 @@ const originValidator = createOriginValidator({ allowedOrigins, isProd });
 
 fastify.register(cors, {
   origin: originValidator,
-  methods: ['GET', 'POST', 'DELETE'],
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 });
 
 fastify.register(jwt, { secret: jwtSecret });
@@ -43,8 +44,9 @@ fastify.register(require('./routes/dashboard'), { prefix: '/api/dashboard' });
 
 fastify.register(socketio, {
   cors: {
-    origin: originValidator,
+    origin: allowedOrigins.length ? allowedOrigins : true,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 registerSocketHandlers(fastify);

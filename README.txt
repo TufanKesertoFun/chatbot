@@ -28,6 +28,7 @@ Quick start
    cp .env.example .env   (or create .env manually)
    npx prisma migrate dev
    npm run seed
+   
    npm run dev
 
 2. Client setup

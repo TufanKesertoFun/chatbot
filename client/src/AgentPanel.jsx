@@ -481,6 +481,14 @@ function KnowledgeBaseView({ token, t }) {
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
+  const [diUrl, setDiUrl] = useState('');
+  const [diScrapingModel, setDiScrapingModel] = useState('firecrawl');
+  const [diProcessImages, setDiProcessImages] = useState(false);
+  const [diMaxPages, setDiMaxPages] = useState(30);
+  const [diImporting, setDiImporting] = useState(false);
+  const [diYouTubeUrl, setDiYouTubeUrl] = useState('');
+  const [diYouTubeLoading, setDiYouTubeLoading] = useState(false);
+  const [diResult, setDiResult] = useState(null);
 
   useEffect(() => { fetchDocs(); }, []);
   const fetchDocs = async () => { const res = await api.get('/admin/knowledge-base', { headers: { Authorization: `Bearer ${token}` } }); setDocs(res.data); };
@@ -566,49 +574,149 @@ function KnowledgeBaseView({ token, t }) {
     }
   };
 
+  const handleImportUrlWithDocumentIntelligence = async () => {
+    if (!diUrl.trim()) return;
+    setDiImporting(true);
+    setDiResult(null);
+    try {
+      const response = await api.post('/admin/document-intelligence/import-url', {
+        url: diUrl.trim(),
+        scrapingModel: diScrapingModel,
+        crawlSite: true,
+        maxPages: diMaxPages,
+        processImages: diProcessImages,
+        useSemanticChunking: true,
+        splitByHeaders: false,
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      setDiResult(response.data);
+      setDiUrl('');
+      await fetchDocs();
+    } catch (err) {
+      alert(err?.response?.data?.error || t('kb.diImportFailed'));
+    } finally {
+      setDiImporting(false);
+    }
+  };
+
+  const handleProcessYouTubeWithDocumentIntelligence = async () => {
+    if (!diYouTubeUrl.trim()) return;
+    setDiYouTubeLoading(true);
+    setDiResult(null);
+    try {
+      const response = await api.post('/admin/document-intelligence/process-youtube', {
+        videoUrl: diYouTubeUrl.trim(),
+        botId: 'ovobot-admin',
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      setDiResult(response.data);
+      setDiYouTubeUrl('');
+    } catch (err) {
+      alert(err?.response?.data?.error || t('kb.diYouTubeFailed'));
+    } finally {
+      setDiYouTubeLoading(false);
+    }
+  };
+
   return (
-    <div className="p-8 h-full overflow-y-auto">
-      <div className="flex justify-between items-center mb-6"><h1 className="text-2xl font-bold text-slate-800">{t('kb.title')}</h1><button onClick={() => setShowForm(!showForm)} className="bg-amber-600 text-white px-4 py-2 rounded flex gap-2"><Plus size={20}/>{t('kb.new')}</button></div>
-      <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4 mb-4">
-        <div className="font-semibold mb-2">{t('kb.guideTitle')}</div>
-        <ul className="list-disc pl-4 text-sm space-y-1">
-          <li>{t('kb.guide1')}</li>
-          <li>{t('kb.guide2')}</li>
-          <li>{t('kb.guide3')}</li>
-          <li>{t('kb.guide4')}</li>
-        </ul>
+    <div className="p-6 lg:p-8 h-full overflow-y-auto bg-[radial-gradient(circle_at_top_right,#dbeafe_0%,#f8fafc_35%,#f8fafc_100%)]">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold text-slate-900">{t('kb.title')}</h1>
+        <button onClick={() => setShowForm(!showForm)} className="bg-slate-900 text-white px-4 py-2.5 rounded-xl flex gap-2 items-center hover:bg-slate-800 shadow-sm">
+          <Plus size={18}/>{t('kb.new')}
+        </button>
       </div>
-      <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-xl p-4 mb-4">
-        <div className="font-semibold mb-2">{t('kb.bulkHelpTitle')}</div>
-        <ul className="list-disc pl-4 text-sm space-y-1">
-          <li>{t('kb.bulkHelp1')}</li>
-          <li>{t('kb.bulkHelp2')}</li>
-          <li>{t('kb.bulkHelp3')}</li>
-          <li>{t('kb.bulkHelp4')}</li>
-        </ul>
+      <div className="bg-white/95 backdrop-blur p-6 rounded-2xl border border-slate-200/70 mb-6 space-y-4 shadow-sm">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900">{t('kb.diTitle')}</h2>
+          <p className="text-sm text-slate-600 mt-1">{t('kb.diDescription')}</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-3 items-end">
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{t('kb.diUrl')}</label>
+            <input
+              value={diUrl}
+              onChange={(event) => setDiUrl(event.target.value)}
+              className="w-full border border-slate-200 bg-white p-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400"
+              placeholder="https://example.com/page"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{t('kb.diScraper')}</label>
+            <select value={diScrapingModel} onChange={(event) => setDiScrapingModel(event.target.value)} className="border border-slate-200 bg-white p-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400">
+              <option value="firecrawl">firecrawl</option>
+              <option value="jina">jina</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{t('kb.diMaxPages')}</label>
+            <input
+              type="number"
+              min="1"
+              max="200"
+              value={diMaxPages}
+              onChange={(event) => setDiMaxPages(Number(event.target.value || 1))}
+              className="border border-slate-200 bg-white p-2.5 rounded-xl w-24 focus:outline-none focus:ring-2 focus:ring-sky-400"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-700 pb-2">
+            <input type="checkbox" checked={diProcessImages} onChange={(event) => setDiProcessImages(event.target.checked)} />
+            {t('kb.diProcessImages')}
+          </label>
+        </div>
+        <div className="flex gap-3">
+          <button
+            onClick={handleImportUrlWithDocumentIntelligence}
+            disabled={diImporting || !diUrl.trim()}
+            className="bg-gradient-to-r from-sky-600 to-indigo-600 text-white px-4 py-2.5 rounded-xl disabled:opacity-50 shadow-sm hover:shadow"
+          >
+            {diImporting ? t('kb.diImporting') : t('kb.diImportAction')}
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-end">
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{t('kb.diYouTubeUrl')}</label>
+            <input
+              value={diYouTubeUrl}
+              onChange={(event) => setDiYouTubeUrl(event.target.value)}
+              className="w-full border border-slate-200 bg-white p-2.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-400"
+              placeholder="https://www.youtube.com/watch?v=..."
+            />
+          </div>
+          <button
+            onClick={handleProcessYouTubeWithDocumentIntelligence}
+            disabled={diYouTubeLoading || !diYouTubeUrl.trim()}
+            className="bg-gradient-to-r from-rose-500 to-fuchsia-600 text-white px-4 py-2.5 rounded-xl disabled:opacity-50 shadow-sm hover:shadow"
+          >
+            {diYouTubeLoading ? t('kb.diYouTubeProcessing') : t('kb.diYouTubeAction')}
+          </button>
+        </div>
+        {diResult && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+            <div className="font-semibold mb-1">{t('kb.diLastResult')}</div>
+            <pre className="text-xs whitespace-pre-wrap break-words">{JSON.stringify(diResult, null, 2)}</pre>
+          </div>
+        )}
       </div>
-      <div className="bg-white p-6 rounded-xl border mb-6 space-y-4">
+      <div className="bg-white/95 backdrop-blur p-6 rounded-2xl border border-slate-200/70 mb-6 space-y-4 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-bold text-slate-800">{t('kb.bulkTitle')}</h2>
-            <p className="text-sm text-slate-500 mt-1">{t('kb.bulkDescription')}</p>
+            <h2 className="text-xl font-bold text-slate-900">{t('kb.bulkTitle')}</h2>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => downloadTemplate('json')} className="bg-slate-100 text-slate-700 px-3 py-2 rounded text-xs">{t('kb.bulkDownloadJsonTemplate')}</button>
-            <button onClick={() => downloadTemplate('csv')} className="bg-slate-100 text-slate-700 px-3 py-2 rounded text-xs">{t('kb.bulkDownloadCsvTemplate')}</button>
+            <button onClick={() => downloadTemplate('json')} className="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-xs hover:bg-slate-200">{t('kb.bulkDownloadJsonTemplate')}</button>
+            <button onClick={() => downloadTemplate('csv')} className="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-xs hover:bg-slate-200">{t('kb.bulkDownloadCsvTemplate')}</button>
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-bold text-slate-700 mb-2">{t('kb.bulkFormat')}</label>
-            <select value={bulkFormat} onChange={e => setBulkFormat(e.target.value)} className="w-full border p-2 rounded">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{t('kb.bulkFormat')}</label>
+            <select value={bulkFormat} onChange={e => setBulkFormat(e.target.value)} className="w-full border border-slate-200 p-2.5 rounded-xl">
               <option value="json">JSON</option>
               <option value="csv">CSV</option>
             </select>
           </div>
           <div>
-            <label className="block text-sm font-bold text-slate-700 mb-2">{t('kb.bulkMode')}</label>
-            <select value={bulkMode} onChange={e => setBulkMode(e.target.value)} className="w-full border p-2 rounded">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{t('kb.bulkMode')}</label>
+            <select value={bulkMode} onChange={e => setBulkMode(e.target.value)} className="w-full border border-slate-200 p-2.5 rounded-xl">
               <option value="AUTO">{t('kb.bulkModeAuto')}</option>
               <option value="DOCUMENT">{t('kb.bulkModeDocument')}</option>
               <option value="FAQ">{t('kb.bulkModeFaq')}</option>
@@ -616,7 +724,7 @@ function KnowledgeBaseView({ token, t }) {
           </div>
         </div>
         <div>
-          <label className="block text-sm font-bold text-slate-700 mb-2">{t('kb.bulkChooseFile')}</label>
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{t('kb.bulkChooseFile')}</label>
           <input
             type="file"
             accept=".json,.csv,text/csv,application/json"
@@ -627,7 +735,7 @@ function KnowledgeBaseView({ token, t }) {
               if (name.endsWith('.csv')) setBulkFormat('csv');
               if (name.endsWith('.json')) setBulkFormat('json');
             }}
-            className="w-full border p-2 rounded"
+            className="w-full border border-slate-200 p-2.5 rounded-xl"
           />
           {bulkFile && (
             <div className="text-xs text-slate-500 mt-1">
@@ -636,16 +744,16 @@ function KnowledgeBaseView({ token, t }) {
           )}
         </div>
         <div>
-          <label className="block text-sm font-bold text-slate-700 mb-2">{t('kb.bulkPasteLabel')}</label>
+          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{t('kb.bulkPasteLabel')}</label>
           <textarea
             value={bulkText}
             onChange={(event) => setBulkText(event.target.value)}
-            className="w-full border p-2 rounded h-40 font-mono text-xs"
+            className="w-full border border-slate-200 p-2.5 rounded-xl h-36 font-mono text-xs"
             placeholder={t('kb.bulkPastePlaceholder')}
           />
         </div>
         <div>
-          <button onClick={handleBulkImport} disabled={bulkImporting} className="bg-indigo-600 text-white px-6 py-2 rounded">
+          <button onClick={handleBulkImport} disabled={bulkImporting} className="bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-6 py-2.5 rounded-xl shadow-sm disabled:opacity-50">
             {bulkImporting ? t('kb.bulkImporting') : t('kb.bulkImport')}
           </button>
         </div>
@@ -672,8 +780,8 @@ function KnowledgeBaseView({ token, t }) {
           </div>
         )}
       </div>
-      {showForm && <div className="bg-white p-6 rounded-xl border mb-6"><form onSubmit={handleSave} className="space-y-4"><input className="w-full border p-2 rounded" placeholder={t('kb.docTitle')} value={form.title} onChange={e => setForm({...form, title: e.target.value})} required/><textarea className="w-full border p-2 rounded h-32" placeholder={t('kb.docContent')} value={form.content} onChange={e => setForm({...form, content: e.target.value})} required/><button className="bg-slate-900 text-white px-6 py-2 rounded">{t('common.save')}</button></form></div>}
-      <div className="overflow-y-auto bg-white rounded-xl border max-h-[42vh]"><table className="w-full text-left"><thead className="bg-slate-50 border-b"><tr><th className="p-4">{t('kb.docTitle')}</th><th className="p-4">{t('kb.date')}</th><th className="p-4">{t('users.action')}</th></tr></thead><tbody>{docs.map(doc => (<tr key={doc.id} className="hover:bg-slate-50 border-b"><td className="p-4 font-medium">{doc.title}</td><td className="p-4 text-slate-500">{new Date(doc.created_at).toLocaleDateString()}</td><td className="p-4"><button onClick={() => handleDelete(doc.id)} className="text-red-500 p-2"><Trash2 size={18}/></button></td></tr>))}</tbody></table></div>
+      {showForm && <div className="bg-white/95 p-6 rounded-2xl border border-slate-200/70 mb-6 shadow-sm"><form onSubmit={handleSave} className="space-y-4"><input className="w-full border border-slate-200 p-2.5 rounded-xl" placeholder={t('kb.docTitle')} value={form.title} onChange={e => setForm({...form, title: e.target.value})} required/><textarea className="w-full border border-slate-200 p-2.5 rounded-xl h-32" placeholder={t('kb.docContent')} value={form.content} onChange={e => setForm({...form, content: e.target.value})} required/><button className="bg-slate-900 text-white px-6 py-2.5 rounded-xl">{t('common.save')}</button></form></div>}
+      <div className="overflow-y-auto bg-white/95 rounded-2xl border border-slate-200/70 max-h-[42vh] shadow-sm"><table className="w-full text-left"><thead className="bg-slate-50 border-b"><tr><th className="p-4">{t('kb.docTitle')}</th><th className="p-4">{t('kb.date')}</th><th className="p-4">{t('users.action')}</th></tr></thead><tbody>{docs.map(doc => (<tr key={doc.id} className="hover:bg-slate-50 border-b"><td className="p-4 font-medium text-slate-900">{doc.title}</td><td className="p-4 text-slate-500">{new Date(doc.created_at).toLocaleDateString()}</td><td className="p-4"><button onClick={() => handleDelete(doc.id)} className="text-rose-600 p-2 hover:bg-rose-50 rounded-lg"><Trash2 size={18}/></button></td></tr>))}</tbody></table></div>
     </div>
   );
 }
@@ -1662,14 +1770,14 @@ export default function AgentPanel() {
   };
 
   return (
-    <div className="flex h-screen w-full bg-slate-50 font-sans text-slate-900 overflow-hidden relative">
+    <div className="flex h-screen w-full bg-[radial-gradient(circle_at_top_left,#dbeafe_0%,#f1f5f9_30%,#eef2ff_100%)] font-sans text-slate-900 overflow-hidden relative">
       {toast && (
-        <div className="absolute top-4 right-4 bg-slate-900 text-white text-sm px-4 py-2 rounded shadow-lg z-50">
+        <div className="absolute top-4 right-4 bg-slate-900/95 backdrop-blur text-white text-sm px-4 py-2 rounded-xl shadow-lg z-50">
           {toast}
         </div>
       )}
       {/* Sidebar */}
-      <div className="w-64 bg-slate-900 text-slate-300 flex flex-col shrink-0 min-h-0">
+      <div className="w-64 bg-gradient-to-b from-slate-950 via-slate-900 to-indigo-950 text-slate-300 flex flex-col shrink-0 min-h-0 border-r border-white/10 shadow-2xl">
         <div className="px-6 pt-6 pb-4 text-white text-xl tracking-wide font-medium">{t('common.brand')}</div>
         <div className="px-6 mb-4 text-xs">
           <div className="text-slate-500 uppercase">{t('common.loggedInAs')}</div>
@@ -1681,7 +1789,7 @@ export default function AgentPanel() {
           <select
             value={lang}
             onChange={(e) => setLang(e.target.value)}
-            className="w-full bg-slate-800 text-white border border-slate-700 rounded px-2 py-1.5 text-xs"
+            className="w-full bg-slate-800/80 text-white border border-slate-700 rounded-xl px-2 py-1.5 text-xs"
           >
             <option value="tr">{t('common.turkish')}</option>
             <option value="en">{t('common.english')}</option>
@@ -1691,23 +1799,23 @@ export default function AgentPanel() {
           </select>
         </div>
         <div className="px-6 mb-4">
-          <button onClick={clearAuth} className="w-full flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-slate-200 hover:text-white hover:bg-slate-700 rounded-lg py-2 text-sm">
+          <button onClick={clearAuth} className="w-full flex items-center justify-center gap-2 bg-slate-800/80 border border-slate-700 text-slate-200 hover:text-white hover:bg-slate-700 rounded-xl py-2 text-sm">
             <LogOut size={16}/> {t('common.logout')}
           </button>
         </div>
         <nav className="flex-1 min-h-0 overflow-y-auto px-4 space-y-2 text-sm tracking-wide pb-4">
-          <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='dashboard' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><LayoutDashboard size={18} /> {t('common.dashboard')}</button>
-          <button onClick={() => setActiveTab('inbox')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='inbox' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><MessageSquare size={18} /> {t('common.inbox')}</button>
-          <button onClick={() => setActiveTab('leads')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='leads' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><User size={18} /> {t('common.leads')}</button>
+          <button onClick={() => setActiveTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='dashboard' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><LayoutDashboard size={18} /> {t('common.dashboard')}</button>
+          <button onClick={() => setActiveTab('inbox')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='inbox' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><MessageSquare size={18} /> {t('common.inbox')}</button>
+          <button onClick={() => setActiveTab('leads')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='leads' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><User size={18} /> {t('common.leads')}</button>
           {user.role === 'SUPER_ADMIN' && (
             <>
               <div className="pt-4 pb-2 px-4 text-xs font-bold text-slate-500 uppercase">{t('common.management')}</div>
-              <button onClick={() => setActiveTab('kb')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='kb' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><BookOpen size={18} /> {t('common.knowledgeBase')}</button>
-              <button onClick={() => setActiveTab('users')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='users' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><Users size={18} /> {t('common.users')}</button>
-              <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='settings' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><Settings size={18} /> {t('common.settings')}</button>
-              <button onClick={() => setActiveTab('retrieval')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='retrieval' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><Book size={18} /> {t('common.retrievalDebug')}</button>
-              <button onClick={() => setActiveTab('audit')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='audit' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><Activity size={18} /> {t('common.auditLogs')}</button>
-              <button onClick={() => setActiveTab('training')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium ${activeTab==='training' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}><BookOpen size={18} /> {t('common.training')}</button>
+              <button onClick={() => setActiveTab('kb')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='kb' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><BookOpen size={18} /> {t('common.knowledgeBase')}</button>
+              <button onClick={() => setActiveTab('users')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='users' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><Users size={18} /> {t('common.users')}</button>
+              <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='settings' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><Settings size={18} /> {t('common.settings')}</button>
+              <button onClick={() => setActiveTab('retrieval')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='retrieval' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><Book size={18} /> {t('common.retrievalDebug')}</button>
+              <button onClick={() => setActiveTab('audit')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='audit' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><Activity size={18} /> {t('common.auditLogs')}</button>
+              <button onClick={() => setActiveTab('training')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition ${activeTab==='training' ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow' : 'hover:bg-slate-800/70'}`}><BookOpen size={18} /> {t('common.training')}</button>
             </>
           )}
         </nav>

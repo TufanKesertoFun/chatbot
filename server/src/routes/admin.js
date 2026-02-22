@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const { randomUUID } = require('crypto');
 const ragService = require('../services/rag');
+const documentIntelligence = require('../services/documentIntelligenceMonolith');
 const prisma = require('../lib/prisma');
 
 const logAudit = async ({ userId, action, targetType, targetId, metadata }) => {
@@ -384,6 +385,141 @@ module.exports = async function (fastify, opts) {
         return { success: true, id: result.id };
       } catch (err) {
         return reply.code(503).send({ error: req.t('errors.llmNotConfigured') });
+      }
+    });
+
+    privateRoutes.post('/document-intelligence/scrape-url', { preHandler: requireSuperAdmin }, async (req, reply) => {
+      const url = String(req.body?.url || '').trim();
+
+      if (!url) {
+        return reply.code(400).send({ error: req.t('errors.urlRequired') });
+      }
+
+      try {
+        const result = await documentIntelligence.scrapeUrl(url);
+        return result;
+      } catch (err) {
+        req.log.error({ err: err?.message }, 'document intelligence scrape failed');
+        return reply.code(err.statusCode || 502).send({ error: err.message || req.t('errors.documentIntelligenceFailed') });
+      }
+    });
+
+    privateRoutes.post('/document-intelligence/import-url', { preHandler: requireSuperAdmin }, async (req, reply) => {
+      const url = String(req.body?.url || '').trim();
+      const scrapingModel = String(req.body?.scrapingModel || 'firecrawl').trim().toLowerCase();
+      const processImages = Boolean(req.body?.processImages);
+      const useSemanticChunking = req.body?.useSemanticChunking !== false;
+      const splitByHeaders = Boolean(req.body?.splitByHeaders);
+      const crawlSite = req.body?.crawlSite !== false;
+      const maxPagesRaw = Number(req.body?.maxPages || 30);
+      const maxPages = Number.isFinite(maxPagesRaw) ? Math.max(1, Math.min(200, maxPagesRaw)) : 30;
+      const botId = String(req.body?.botId || 'ovobot-admin').trim() || 'ovobot-admin';
+      const userId = req.user?.id ? String(req.user.id) : null;
+
+      if (!url) {
+        return reply.code(400).send({ error: req.t('errors.urlRequired') });
+      }
+
+      try {
+        const pages = crawlSite
+          ? (await documentIntelligence.crawlWebsite(url, { maxPages })).pages
+          : [{
+            url,
+            title: '',
+            content: String((await documentIntelligence.scrapeUrl(url))?.markdown || ''),
+          }];
+
+        const chunkList = pages.flatMap((page, pageIdx) => documentIntelligence.chunkContent(page.content, {
+          source: page.url,
+          botId,
+          userId,
+          idPrefix: `web_${Date.now()}_${pageIdx}`,
+          pageNumber: pageIdx + 1,
+        }));
+        const combinedContent = chunkList
+          .map((item) => String(item?.content || '').trim())
+          .filter(Boolean)
+          .join('\n\n');
+        if (!combinedContent) {
+          return reply.code(422).send({ error: req.t('errors.documentIntelligenceNoChunks') });
+        }
+
+        const firstTitle = String(pages[0]?.title || '').trim();
+        const title = String(req.body?.title || firstTitle || `Website Import - ${url}`).slice(0, 200);
+        const kb = await ragService.addDocument(title, combinedContent);
+
+        await logAudit({
+          userId: req.user?.id,
+          action: 'KB_IMPORT_DOCUMENT_INTELLIGENCE_URL',
+          targetType: 'KnowledgeBase',
+          targetId: kb.id,
+          metadata: {
+            sourceUrl: url,
+            scrapingModel,
+            chunkCount: chunkList.length,
+            pageCount: pages.length,
+            crawlSite,
+            maxPages,
+            processImages,
+            useSemanticChunking,
+            splitByHeaders,
+          },
+        });
+
+        return {
+          success: true,
+          id: kb.id,
+          title: kb.title,
+          sourceUrl: url,
+          pageCount: pages.length,
+          chunkCount: chunkList.length,
+        };
+      } catch (err) {
+        req.log.error({ err: err?.message }, 'document intelligence import url failed');
+        return reply.code(err.statusCode || 502).send({ error: err.message || req.t('errors.documentIntelligenceFailed') });
+      }
+    });
+
+    privateRoutes.post('/document-intelligence/process-youtube', { preHandler: requireSuperAdmin }, async (req, reply) => {
+      const videoUrl = String(req.body?.videoUrl || '').trim();
+      const botId = String(req.body?.botId || 'ovobot-admin').trim() || 'ovobot-admin';
+      const indexName = String(req.body?.indexName || 'default-index').trim() || 'default-index';
+      const extractCaptions = req.body?.extractCaptions !== false;
+      const extractTranscripts = req.body?.extractTranscripts !== false;
+
+      if (!videoUrl) {
+        return reply.code(400).send({ error: req.t('errors.videoUrlRequired') });
+      }
+
+      try {
+        const result = await documentIntelligence.processYouTube(videoUrl, {
+          botId,
+          userId: req.user?.id || null,
+        });
+        const combinedTranscript = Array.isArray(result?.processing_details?.documents)
+          ? result.processing_details.documents.map((item) => String(item?.content || '')).join('\n\n').trim()
+          : '';
+        if (combinedTranscript) {
+          const title = `YouTube - ${result.video_id || 'video'}`;
+          const kb = await ragService.addDocument(title, combinedTranscript);
+          result.kb_id = kb.id;
+        }
+
+        await logAudit({
+          userId: req.user?.id,
+          action: 'KB_IMPORT_DOCUMENT_INTELLIGENCE_YOUTUBE',
+          targetType: 'KnowledgeBase',
+          metadata: {
+            videoUrl,
+            botId,
+            indexName,
+            documentCount: result?.document_count || 0,
+          },
+        });
+        return result;
+      } catch (err) {
+        req.log.error({ err: err?.message }, 'document intelligence youtube failed');
+        return reply.code(err.statusCode || 502).send({ error: err.message || req.t('errors.documentIntelligenceFailed') });
       }
     });
 

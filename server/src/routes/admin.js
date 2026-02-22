@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const { randomUUID } = require('crypto');
 const ragService = require('../services/rag');
 const prisma = require('../lib/prisma');
 
@@ -201,6 +202,59 @@ const runWithConcurrency = async (items, concurrency, handler) => {
 
 module.exports = async function (fastify, opts) {
   const SUPPORTED_AGENT_LANGS = ['tr', 'en', 'de', 'ru', 'fr'];
+  const GOOGLE_ISSUERS = new Set(['accounts.google.com', 'https://accounts.google.com']);
+
+  const issueAgentToken = (user) => {
+    const token = fastify.jwt.sign(
+      { id: user.id, email: user.email, role: user.role, type: 'agent' },
+      { expiresIn: '12h', audience: 'agent', issuer: 'emlak-chat' }
+    );
+    return {
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        fullName: user.full_name,
+        agentLang: user.agent_lang,
+      },
+    };
+  };
+
+  const parseAllowedGoogleClientIds = () => (
+    String(process.env.GOOGLE_CLIENT_ID || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+
+  const verifyGoogleToken = async ({ credential, allowedClientIds }) => {
+    if (!credential || typeof credential !== 'string') {
+      throw new Error('Missing Google credential');
+    }
+    const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
+    if (!response.ok) {
+      throw new Error('Invalid Google credential');
+    }
+    const payload = await response.json();
+    const aud = String(payload.aud || '');
+    const iss = String(payload.iss || '');
+    const email = String(payload.email || '').trim().toLowerCase();
+    const emailVerified = String(payload.email_verified || '').toLowerCase() === 'true';
+    const exp = Number(payload.exp || 0);
+    const isExpired = !Number.isFinite(exp) || (exp * 1000) <= Date.now();
+    const audienceOk = allowedClientIds.includes(aud);
+    const issuerOk = GOOGLE_ISSUERS.has(iss);
+
+    if (!audienceOk || !issuerOk || !email || !emailVerified || isExpired) {
+      throw new Error('Google credential verification failed');
+    }
+
+    return {
+      email,
+      fullName: String(payload.name || '').trim() || null,
+    };
+  };
 
   const requireSuperAdmin = async (req, reply) => {
     if (req.user?.role !== 'SUPER_ADMIN') {
@@ -213,9 +267,83 @@ module.exports = async function (fastify, opts) {
     return `${apiKey.slice(0, 4)}****${apiKey.slice(-4)}`;
   };
   
+  fastify.post('/signup', { config: { rateLimit: { max: 10, windowMs: 60 * 1000 } } }, async (request, reply) => {
+    const rawEmail = request.body?.email;
+    const email = String(rawEmail || '').trim().toLowerCase();
+    const password = String(request.body?.password || '');
+    const fullName = String(request.body?.fullName || '').trim() || null;
+
+    if (!email || !password) {
+      return reply.code(400).send({ error: request.t('errors.emailPasswordRequired') });
+    }
+    if (password.length < 12) {
+      return reply.code(400).send({ error: request.t('errors.passwordMin12') });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      return reply.code(409).send({ error: request.t('errors.emailAlreadyExists') });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({
+      data: {
+        email,
+        password_hash: hash,
+        full_name: fullName,
+        role: 'AGENT',
+      },
+    });
+
+    return issueAgentToken(user);
+  });
+
+  fastify.post('/google-auth', { config: { rateLimit: { max: 20, windowMs: 60 * 1000 } } }, async (request, reply) => {
+    const allowedClientIds = parseAllowedGoogleClientIds();
+    if (allowedClientIds.length === 0) {
+      return reply.code(500).send({ error: request.t('errors.googleClientIdMissing') });
+    }
+
+    try {
+      const mode = String(request.body?.mode || 'signin').toLowerCase();
+      const payload = await verifyGoogleToken({
+        credential: request.body?.credential,
+        allowedClientIds,
+      });
+
+      let user = await prisma.user.findUnique({ where: { email: payload.email } });
+      if (!user && mode === 'signin') {
+        return reply.code(404).send({ error: request.t('errors.userNotFound') });
+      }
+
+      if (!user) {
+        const placeholderHash = await bcrypt.hash(randomUUID(), 10);
+        user = await prisma.user.create({
+          data: {
+            email: payload.email,
+            password_hash: placeholderHash,
+            full_name: payload.fullName,
+            role: 'AGENT',
+          },
+        });
+      } else if (!user.full_name && payload.fullName) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: { full_name: payload.fullName },
+        });
+      }
+
+      return issueAgentToken(user);
+    } catch (err) {
+      request.log.warn({ err: err?.message }, 'google auth failed');
+      return reply.code(401).send({ error: request.t('errors.invalidGoogleCredentials') });
+    }
+  });
+
   // LOGIN
   fastify.post('/login', { config: { rateLimit: { max: 10, windowMs: 60 * 1000 } } }, async (request, reply) => {
-    const { email, password } = request.body || {};
+    const email = String(request.body?.email || '').trim().toLowerCase();
+    const password = request.body?.password;
     if (!email || !password) return reply.code(400).send({ error: request.t('errors.emailPasswordRequired') });
     const user = await prisma.user.findUnique({ where: { email } });
     
@@ -223,11 +351,7 @@ module.exports = async function (fastify, opts) {
       return reply.code(401).send({ error: request.t('errors.invalidCredentials') });
     }
 
-    const token = fastify.jwt.sign(
-      { id: user.id, email: user.email, role: user.role, type: 'agent' },
-      { expiresIn: '12h', audience: 'agent', issuer: 'emlak-chat' }
-    );
-    return { token, user: { id: user.id, email: user.email, role: user.role, fullName: user.full_name, agentLang: user.agent_lang } };
+    return issueAgentToken(user);
   });
 
   // --- KORUMALI ROTALAR ---

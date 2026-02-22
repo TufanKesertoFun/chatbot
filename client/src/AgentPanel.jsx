@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { api, SOCKET_URL } from './api';
 import { io } from 'socket.io-client';
 import { createLogger } from './logger';
@@ -46,34 +46,141 @@ function Hint({ text }) {
 }
 
 function LoginScreen({ onLogin, t }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [mode, setMode] = useState('signin');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('admin@example.com');
+  const [password, setPassword] = useState('StrongPassword123!');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [googleReady, setGoogleReady] = useState(false);
+  const googleButtonRef = useRef(null);
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+
+  const applyAuth = (data) => {
+    onLogin(data.token, data.user);
+  };
+
+  const handleGoogleCredential = useCallback(async (credentialResponse) => {
+    if (!credentialResponse?.credential) return;
+    setLoading(true);
+    setError('');
+    try {
+      const res = await api.post('/admin/google-auth', {
+        credential: credentialResponse.credential,
+        mode,
+      });
+      applyAuth(res.data);
+    } catch (err) {
+      setError(err?.response?.data?.error || t('login.failed'));
+    } finally {
+      setLoading(false);
+    }
+  }, [mode, t]);
+
+  useEffect(() => {
+    if (!googleClientId) return;
+    if (window.google?.accounts?.id) {
+      setGoogleReady(true);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => setGoogleReady(true);
+    script.onerror = () => setGoogleReady(false);
+    document.head.appendChild(script);
+
+    return () => {
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+  }, [googleClientId]);
+
+  useEffect(() => {
+    if (!googleReady || !googleButtonRef.current || !googleClientId || !window.google?.accounts?.id) return;
+    window.google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: handleGoogleCredential,
+    });
+    googleButtonRef.current.innerHTML = '';
+    window.google.accounts.id.renderButton(googleButtonRef.current, {
+      type: 'standard',
+      theme: 'outline',
+      size: 'large',
+      width: 360,
+      text: mode === 'signup' ? 'signup_with' : 'signin_with',
+    });
+  }, [googleReady, googleClientId, handleGoogleCredential, mode]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setError('');
     try {
-      const res = await api.post('/admin/login', { email, password });
-      onLogin(res.data.token, res.data.user);
+      const payload = { email, password };
+      const endpoint = mode === 'signup' ? '/admin/signup' : '/admin/login';
+      const res = await api.post(endpoint, mode === 'signup' ? { ...payload, fullName } : payload);
+      applyAuth(res.data);
     } catch (err) {
-      alert(t('login.failed'));
+      setError(err?.response?.data?.error || t('login.failed'));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="h-screen w-full bg-slate-900 flex items-center justify-center font-sans">
+    <div className="h-screen w-full bg-slate-900 flex items-center justify-center font-sans p-4">
       <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md text-center">
         <h2 className="text-2xl font-bold text-slate-900 mb-2">{t('login.title')}</h2>
-        <form onSubmit={handleSubmit} className="space-y-4 mt-6">
+        <div className="mt-5 mb-4 grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-xl">
+          <button
+            type="button"
+            onClick={() => setMode('signin')}
+            className={`py-2 text-sm font-semibold rounded-lg transition ${mode === 'signin' ? 'bg-white shadow text-slate-900' : 'text-slate-600'}`}
+          >
+            {t('login.signIn')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('signup')}
+            className={`py-2 text-sm font-semibold rounded-lg transition ${mode === 'signup' ? 'bg-white shadow text-slate-900' : 'text-slate-600'}`}
+          >
+            {t('login.signUp')}
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {mode === 'signup' && (
+            <input
+              type="text"
+              value={fullName}
+              onChange={e => setFullName(e.target.value)}
+              className="w-full border p-3 rounded-lg"
+              placeholder={t('login.fullName')}
+            />
+          )}
           <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full border p-3 rounded-lg" placeholder={t('login.email')} />
           <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full border p-3 rounded-lg" placeholder={t('login.password')} />
-          <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700">
-            {loading ? t('login.signingIn') : t('login.signIn')}
+          {mode === 'signup' && <div className="text-xs text-slate-500 text-left">{t('login.passwordRule')}</div>}
+          {error && <div className="text-sm text-red-600 text-left">{error}</div>}
+          <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-60">
+            {loading ? t('login.signingIn') : (mode === 'signup' ? t('login.createAccount') : t('login.signIn'))}
           </button>
         </form>
+        <div className="my-4 flex items-center gap-2 text-xs text-slate-400">
+          <div className="h-px bg-slate-200 flex-1" />
+          <span>{t('login.orContinue')}</span>
+          <div className="h-px bg-slate-200 flex-1" />
+        </div>
+        {googleClientId ? (
+          <div className="flex justify-center">
+            <div ref={googleButtonRef} />
+          </div>
+        ) : (
+          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+            {t('login.googleNotConfigured')}
+          </div>
+        )}
       </div>
     </div>
   );

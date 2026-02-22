@@ -45,7 +45,7 @@ export class OvoWidgetClient {
 
   async startSession({ visitorName, preferredLang, locale, userProfile, user }) {
     const normalizedProfile = normalizeUserProfile(userProfile || user);
-    const response = await this.apiClient.post('/api/widget/session', {
+    const response = await this.apiClient.post('/widget/session', {
       visitorName,
       preferredLang,
       userProfile: normalizedProfile,
@@ -57,7 +57,11 @@ export class OvoWidgetClient {
 
   connect({ token, conversationId, onMessage, onConnect, onStatusChange, onDisconnect, onConnectError }) {
     if (this.socket) return this.socket;
-    const socket = io(this.socketUrl, { auth: { token } });
+    const socket = io(this.socketUrl, {
+      auth: { token },
+      transports: ['websocket'],
+      path: '/socket.io',
+    });
     socket.on('connect', () => {
       this.logger.info?.('widget.socket.connected');
       socket.emit('join', { conversationId });

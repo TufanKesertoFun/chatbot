@@ -54,7 +54,7 @@ function LoginScreen({ onLogin, t }) {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await api.post('/api/admin/login', { email, password });
+      const res = await api.post('/admin/login', { email, password });
       onLogin(res.data.token, res.data.user);
     } catch (err) {
       alert(t('login.failed'));

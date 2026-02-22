@@ -2,8 +2,11 @@
 import axios from 'axios';
 import { getStoredLanguage } from './i18n/context';
 
-// Backend portuna dikkat (3001)
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const normalizedApiBase = rawApiUrl.replace(/\/+$/, '');
+const API_URL = normalizedApiBase.endsWith('/api')
+  ? normalizedApiBase
+  : `${normalizedApiBase}/api`;
 
 export const api = axios.create({
   baseURL: API_URL,
@@ -17,4 +20,5 @@ api.interceptors.request.use((config) => {
   return nextConfig;
 });
 
-export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001';
+export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL
+  || normalizedApiBase.replace(/\/api$/, '');
